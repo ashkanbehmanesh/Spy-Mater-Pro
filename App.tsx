@@ -7,8 +7,8 @@ import Reveal from './components/Reveal';
 import GameView from './components/GameView';
 import Summary from './components/Summary';
 
-// Fisher-Yates shuffle algorithm
-const shuffleArray = <T,>(array: T[]): T[] => {
+// Fisher-Yates shuffle algorithm - Constrained to object types to allow spreading
+const shuffleArray = <T extends object>(array: T[]): T[] => {
   const shuffled = [...array];
   for (let i = shuffled.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -31,7 +31,7 @@ const App: React.FC = () => {
   const startGame = useCallback(() => {
     if (players.length < 3) return;
 
-    // Shuffle the players list as requested
+    // Shuffle the players list
     const shuffledPlayers = shuffleArray(players);
     
     // Ensure spyCount is valid (at least 1, but less than players.length)
