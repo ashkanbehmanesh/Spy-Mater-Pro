@@ -36,6 +36,7 @@ const App: React.FC = () => {
   const [peerId, setPeerId] = useState<string>('');
   const [isHost, setIsHost] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
   const peerRef = useRef<Peer | null>(null);
   const connectionsRef = useRef<any[]>([]);
 
@@ -66,8 +67,14 @@ const App: React.FC = () => {
         const msg = data as PeerMessage;
         if (msg.type === 'PLAYER_JOINED') {
           setPlayers(prev => {
-            if (prev.find(p => p.id === msg.payload.id)) return prev;
-            const newList = [...prev, msg.payload];
+            const existingIdx = prev.findIndex(p => p.id === msg.payload.id);
+            let newList;
+            if (existingIdx !== -1) {
+              newList = [...prev];
+              newList[existingIdx] = { ...newList[existingIdx], ...msg.payload };
+            } else {
+              newList = [...prev, msg.payload];
+            }
             broadcast({ type: 'SYNC_PLAYERS', payload: newList });
             return newList;
           });
@@ -81,12 +88,23 @@ const App: React.FC = () => {
       });
     });
 
+    peer.on('disconnected', () => {
+      setIsReconnecting(true);
+      peer.reconnect();
+    });
+
+    peer.on('open', () => setIsReconnecting(false));
+
     peer.on('error', (err) => {
       console.error('Peer error:', err);
       setIsConnecting(false);
-      alert(language === Language.EN ? 'Connection error. Try again.' : 'خطا در اتصال. دوباره تلاش کنید.');
-      peer.destroy();
-      peerRef.current = null;
+      if (err.type === 'lost-connection') {
+         peer.reconnect();
+      } else {
+        alert(language === Language.EN ? 'Connection error. Try again.' : 'خطا در اتصال. دوباره تلاش کنید.');
+        peer.destroy();
+        peerRef.current = null;
+      }
     });
   }, [broadcast, language]);
 
@@ -127,10 +145,19 @@ const App: React.FC = () => {
       });
     });
 
+    peer.on('disconnected', () => {
+      setIsReconnecting(true);
+      peer.reconnect();
+    });
+
+    peer.on('open', () => setIsReconnecting(false));
+
     peer.on('error', (err) => {
       console.error('Peer error:', err);
       setIsConnecting(false);
-      alert(language === Language.EN ? 'Networking error.' : 'خطای شبکه.');
+      if (err.type === 'lost-connection') {
+        peer.reconnect();
+      }
     });
   }, [language]);
 
@@ -162,22 +189,29 @@ const App: React.FC = () => {
 
   const handleRevealNext = useCallback(() => {
     if (gameMode === GameMode.ONLINE) {
-      const updatedPlayers = [...players];
-      const myIdx = players.findIndex(p => p.id === (peerRef.current?.id));
-      if (myIdx !== -1) updatedPlayers[myIdx].hasSeenRole = true;
-      setPlayers(updatedPlayers);
-      if (!isHost) {
-        broadcast({ type: 'PLAYER_JOINED', payload: updatedPlayers[myIdx] });
-      }
-      const allReady = updatedPlayers.every(p => p.hasSeenRole);
-      if (allReady && isHost) {
-        setGameState(GameState.PLAYING);
-        broadcast({ type: 'STATE_UPDATE', payload: { gameState: GameState.PLAYING } });
-      }
+      const myId = peerRef.current?.id;
+      setPlayers(prev => {
+        const newList = prev.map(p => p.id === myId ? { ...p, hasSeenRole: true } : p);
+        const meUpdated = newList.find(p => p.id === myId);
+        if (meUpdated) {
+          if (isHost) {
+            broadcast({ type: 'SYNC_PLAYERS', payload: newList });
+          } else {
+            broadcast({ type: 'PLAYER_JOINED', payload: meUpdated });
+          }
+        }
+        return newList;
+      });
     } else {
-      const updatedPlayers = [...players];
-      updatedPlayers[revealingPlayerIndex].hasSeenRole = true;
-      setPlayers(updatedPlayers);
+      setPlayers(prev => {
+        const newList = [...prev];
+        newList[revealingPlayerIndex].hasSeenRole = true;
+        return newList;
+      });
+      
+      // Delay transition to next player slightly if needed, but local logic requires button push
+      // The button push happens in Reveal.tsx which calls handleRevealNext.
+      // To hide for the NEXT player, we use the key trick in render.
       if (revealingPlayerIndex < players.length - 1) {
         setRevealingPlayerIndex(revealingPlayerIndex + 1);
       } else {
@@ -185,6 +219,17 @@ const App: React.FC = () => {
       }
     }
   }, [players, revealingPlayerIndex, gameMode, isHost, broadcast]);
+
+  // Host transition check: Start timer when everyone is ready
+  useEffect(() => {
+    if (isHost && gameState === GameState.REVEAL && players.length > 0) {
+      const allReady = players.every(p => p.hasSeenRole);
+      if (allReady) {
+        setGameState(GameState.PLAYING);
+        broadcast({ type: 'STATE_UPDATE', payload: { gameState: GameState.PLAYING } });
+      }
+    }
+  }, [players, isHost, gameState, broadcast]);
 
   const resetGame = useCallback(() => {
     setGameState(GameState.SETUP);
@@ -221,6 +266,12 @@ const App: React.FC = () => {
 
   return (
     <div className={`min-h-screen no-select flex flex-col items-center p-4 pb-28 transition-colors duration-500 ${isRtl ? 'rtl text-right' : ''}`}>
+      {isReconnecting && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-orange-600 text-white px-4 py-2 rounded-full text-xs font-bold animate-pulse shadow-lg">
+          {language === Language.EN ? 'Reconnecting to server...' : 'در حال اتصال مجدد به سرور...'}
+        </div>
+      )}
+
       <div className="w-full max-w-md bg-slate-900/50 backdrop-blur-xl border border-slate-800 rounded-3xl overflow-hidden shadow-2xl mb-4">
         {/* Header */}
         <div className="p-6 border-b border-slate-800 flex justify-between items-center">
@@ -261,6 +312,7 @@ const App: React.FC = () => {
 
               {gameState === GameState.REVEAL && currentWord && (
                 <Reveal 
+                  key={me?.id || `local-${revealingPlayerIndex}`}
                   player={me || players[0]} 
                   word={currentWord} 
                   onNext={handleRevealNext}
@@ -291,7 +343,6 @@ const App: React.FC = () => {
         </main>
       </div>
 
-      {/* Bottom Navigation with iOS Safe Area Padding */}
       <nav className="fixed bottom-0 left-0 right-0 px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] bg-slate-900/90 backdrop-blur-2xl border-t border-slate-800 flex justify-around items-center z-50">
         <button 
           onClick={() => setActiveTab('HOME')}
