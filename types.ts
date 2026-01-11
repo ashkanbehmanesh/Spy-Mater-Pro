@@ -30,7 +30,7 @@ export interface WordPair {
   fa: string;
 }
 
-export type PeerMessageType = 'STATE_UPDATE' | 'START_GAME' | 'PLAYER_JOINED' | 'SYNC_PLAYERS';
+export type PeerMessageType = 'STATE_UPDATE' | 'START_GAME' | 'PLAYER_JOINED' | 'PLAYER_LEFT' | 'SYNC_PLAYERS';
 
 export interface PeerMessage {
   type: PeerMessageType;

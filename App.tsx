@@ -48,7 +48,30 @@ const App: React.FC = () => {
     });
   }, []);
 
+  const resetNetworking = useCallback(() => {
+    if (peerRef.current) {
+      peerRef.current.destroy();
+      peerRef.current = null;
+    }
+    connectionsRef.current = [];
+    setPeerId('');
+    setIsHost(false);
+    setIsConnecting(false);
+    setIsReconnecting(false);
+    setPlayers([]);
+  }, []);
+
+  const leaveRoom = useCallback(() => {
+    if (peerRef.current && !isHost) {
+      const myId = peerRef.current.id;
+      broadcast({ type: 'PLAYER_LEFT', payload: myId });
+    }
+    resetNetworking();
+    setGameState(GameState.SETUP);
+  }, [isHost, broadcast, resetNetworking]);
+
   const initHost = useCallback((name: string) => {
+    resetNetworking();
     setIsConnecting(true);
     const id = generateRoomId();
     const peer = new Peer(id);
@@ -79,12 +102,22 @@ const App: React.FC = () => {
             return newList;
           });
         }
+        if (msg.type === 'PLAYER_LEFT') {
+          setPlayers(prev => {
+            const newList = prev.filter(p => p.id !== msg.payload);
+            broadcast({ type: 'SYNC_PLAYERS', payload: newList });
+            return newList;
+          });
+        }
       });
       conn.on('open', () => {
         setPlayers(prev => {
           conn.send({ type: 'SYNC_PLAYERS', payload: prev });
           return prev;
         });
+      });
+      conn.on('close', () => {
+        connectionsRef.current = connectionsRef.current.filter(c => c !== conn);
       });
     });
 
@@ -95,26 +128,32 @@ const App: React.FC = () => {
 
     peer.on('open', () => setIsReconnecting(false));
 
-    peer.on('error', (err) => {
-      console.error('Peer error:', err);
+    peer.on('error', (err: any) => {
+      console.error('Peer host error:', err.type, err);
       setIsConnecting(false);
       if (err.type === 'lost-connection') {
          peer.reconnect();
+      } else if (err.type === 'unavailable-id') {
+         // Try again with a new ID if for some reason the random one is taken
+         initHost(name);
       } else {
-        alert(language === Language.EN ? 'Connection error. Try again.' : 'خطا در اتصال. دوباره تلاش کنید.');
-        peer.destroy();
-        peerRef.current = null;
+        alert(language === Language.EN ? `Server error: ${err.type}` : `خطای سرور: ${err.type}`);
+        resetNetworking();
       }
     });
-  }, [broadcast, language]);
+  }, [broadcast, language, resetNetworking]);
 
   const joinRoom = useCallback((targetRoomId: string, myName: string) => {
+    resetNetworking();
     setIsConnecting(true);
     const peer = new Peer();
     peerRef.current = peer;
 
     peer.on('open', (myPeerId) => {
-      const conn = peer.connect(targetRoomId.toUpperCase());
+      const conn = peer.connect(targetRoomId.toUpperCase(), {
+        reliable: true
+      });
+      connectionsRef.current = [conn];
       
       conn.on('open', () => {
         setIsConnecting(false);
@@ -138,10 +177,10 @@ const App: React.FC = () => {
         }
       });
 
-      conn.on('error', (err) => {
-        console.error('Connection error:', err);
-        setIsConnecting(false);
-        alert(language === Language.EN ? 'Could not join room.' : 'ورود به اتاق ناموفق بود.');
+      conn.on('close', () => {
+        alert(language === Language.EN ? 'Room closed by host.' : 'اتاق توسط میزبان بسته شد.');
+        resetNetworking();
+        setGameState(GameState.SETUP);
       });
     });
 
@@ -152,14 +191,21 @@ const App: React.FC = () => {
 
     peer.on('open', () => setIsReconnecting(false));
 
-    peer.on('error', (err) => {
-      console.error('Peer error:', err);
+    peer.on('error', (err: any) => {
+      console.error('Peer join error:', err.type, err);
       setIsConnecting(false);
       if (err.type === 'lost-connection') {
         peer.reconnect();
+      } else if (err.type === 'peer-unavailable') {
+        alert(language === Language.EN ? 'Room not found. Check the code and try again.' : 'اتاق پیدا نشد. کد را بررسی کرده و دوباره تلاش کنید.');
+        resetNetworking();
+        setGameState(GameState.SETUP);
+      } else {
+        alert(language === Language.EN ? `Connection failed: ${err.type}` : `اتصال ناموفق بود: ${err.type}`);
+        resetNetworking();
       }
     });
-  }, [language]);
+  }, [language, resetNetworking]);
 
   const startGame = useCallback(() => {
     if (players.length < 3) return;
@@ -205,13 +251,12 @@ const App: React.FC = () => {
     } else {
       setPlayers(prev => {
         const newList = [...prev];
-        newList[revealingPlayerIndex].hasSeenRole = true;
+        if (newList[revealingPlayerIndex]) {
+          newList[revealingPlayerIndex].hasSeenRole = true;
+        }
         return newList;
       });
       
-      // Delay transition to next player slightly if needed, but local logic requires button push
-      // The button push happens in Reveal.tsx which calls handleRevealNext.
-      // To hide for the NEXT player, we use the key trick in render.
       if (revealingPlayerIndex < players.length - 1) {
         setRevealingPlayerIndex(revealingPlayerIndex + 1);
       } else {
@@ -220,7 +265,6 @@ const App: React.FC = () => {
     }
   }, [players, revealingPlayerIndex, gameMode, isHost, broadcast]);
 
-  // Host transition check: Start timer when everyone is ready
   useEffect(() => {
     if (isHost && gameState === GameState.REVEAL && players.length > 0) {
       const allReady = players.every(p => p.hasSeenRole);
@@ -249,10 +293,9 @@ const App: React.FC = () => {
       if (peerRef.current) {
         peerRef.current.destroy();
         peerRef.current = null;
-        connectionsRef.current = [];
       }
     };
-  }, [gameMode]);
+  }, []);
 
   const navLabels = {
     home: language === Language.EN ? 'Home' : 'خانه',
@@ -273,7 +316,6 @@ const App: React.FC = () => {
       )}
 
       <div className="w-full max-w-md bg-slate-900/50 backdrop-blur-xl border border-slate-800 rounded-3xl overflow-hidden shadow-2xl mb-4">
-        {/* Header */}
         <div className="p-6 border-b border-slate-800 flex justify-between items-center">
           <h1 className="text-2xl font-bold bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent">
             {language === Language.EN ? 'SPYMASTER PRO' : 'استاد جاسوس'}
@@ -286,7 +328,6 @@ const App: React.FC = () => {
           </button>
         </div>
 
-        {/* Content Area */}
         <main className="p-6">
           {activeTab === 'ABOUT' ? (
             <About lang={language} />
@@ -307,6 +348,7 @@ const App: React.FC = () => {
                   isConnecting={isConnecting}
                   onCreateRoom={initHost}
                   onJoinRoom={joinRoom}
+                  onLeaveRoom={leaveRoom}
                 />
               )}
 

@@ -16,11 +16,12 @@ interface SetupProps {
   isConnecting: boolean;
   onCreateRoom: (name: string) => void;
   onJoinRoom: (roomId: string, name: string) => void;
+  onLeaveRoom: () => void;
 }
 
 const Setup: React.FC<SetupProps> = ({ 
   players, setPlayers, spyCount, setSpyCount, onStart, lang, 
-  gameMode, setGameMode, peerId, isHost, isConnecting, onCreateRoom, onJoinRoom 
+  gameMode, setGameMode, peerId, isHost, isConnecting, onCreateRoom, onJoinRoom, onLeaveRoom 
 }) => {
   const [newName, setNewName] = useState('');
   const [joinRoomId, setJoinRoomId] = useState('');
@@ -31,6 +32,7 @@ const Setup: React.FC<SetupProps> = ({
     online: lang === Language.EN ? 'Online Room' : 'اتاق آنلاین',
     create: lang === Language.EN ? 'Create Room' : 'ساخت اتاق',
     join: lang === Language.EN ? 'Join Room' : 'ورود به اتاق',
+    leave: lang === Language.EN ? 'Leave Room' : 'خروج از اتاق',
     placeholder: lang === Language.EN ? 'Your Name...' : 'نام شما...',
     roomPlaceholder: lang === Language.EN ? 'Room ID (6 chars)...' : 'کد اتاق (۶ رقم)...',
     add: lang === Language.EN ? 'Add' : 'افزودن',
@@ -61,6 +63,11 @@ const Setup: React.FC<SetupProps> = ({
     if (!newName.trim() || joinRoomId.length !== 6) return;
     onJoinRoom(joinRoomId.trim().toUpperCase(), newName.trim());
     setHasLobbyStarted(true);
+  };
+
+  const handleLeave = () => {
+    onLeaveRoom();
+    setHasLobbyStarted(false);
   };
 
   const removePlayer = (id: string) => {
@@ -141,7 +148,7 @@ const Setup: React.FC<SetupProps> = ({
 
       {/* Lobby Player List */}
       <div className="max-h-56 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-        {players.length === 0 ? (
+        {(gameMode === GameMode.LOCAL && players.length === 0) || (gameMode === GameMode.ONLINE && hasLobbyStarted && players.length === 0) ? (
           <p className="text-center text-slate-500 py-8 animate-pulse">{t.emptyList}</p>
         ) : (
           players.map((player) => (
@@ -155,7 +162,7 @@ const Setup: React.FC<SetupProps> = ({
                 {player.isMe && <span className="text-[8px] bg-red-500/20 text-red-500 px-1.5 py-0.5 rounded font-bold">YOU</span>}
               </div>
               {(gameMode === GameMode.LOCAL || isHost) && !player.isMe && (
-                <button onClick={() => removePlayer(player.id)} className="text-slate-500 hover:text-red-400 p-1">
+                <button onClick={() => removePlayer(player.id)} className="text-slate-500 hover:text-red-400 p-1 transition-colors">
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
@@ -166,8 +173,41 @@ const Setup: React.FC<SetupProps> = ({
         )}
       </div>
 
-      {/* Game Settings & Start Button */}
-      {(gameMode === GameMode.LOCAL || isHost) && players.length >= 3 && (
+      {/* Game Settings & Start/Leave Buttons */}
+      {hasLobbyStarted && gameMode === GameMode.ONLINE && (
+        <div className="space-y-4 pt-2">
+          {isHost && players.length >= 3 && (
+            <div className="bg-slate-800/30 border border-slate-700/50 rounded-2xl p-4 flex items-center justify-between">
+              <span className="text-slate-300 text-xs font-medium">{t.spyCountLabel}</span>
+              <div className="flex items-center gap-4">
+                <button onClick={() => spyCount > 1 && setSpyCount(spyCount - 1)} className="w-8 h-8 rounded-full border border-slate-600 flex items-center justify-center">-</button>
+                <span className="text-xl font-bold text-red-500">{spyCount}</span>
+                <button onClick={() => spyCount < players.length - 1 && setSpyCount(spyCount + 1)} className="w-8 h-8 rounded-full border border-slate-600 flex items-center justify-center">+</button>
+              </div>
+            </div>
+          )}
+          
+          <div className="flex flex-col gap-3">
+            {isHost && players.length >= 3 && (
+              <button
+                onClick={onStart}
+                className="w-full py-4 rounded-2xl font-bold text-lg bg-gradient-to-r from-red-600 to-orange-600 text-white shadow-xl active:scale-95 transition-all"
+              >
+                {t.start}
+              </button>
+            )}
+            <button
+              onClick={handleLeave}
+              className="w-full py-3 rounded-xl font-bold text-sm bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition-colors"
+            >
+              {t.leave}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Local Start Button */}
+      {gameMode === GameMode.LOCAL && players.length >= 3 && (
         <div className="space-y-4 pt-2">
           <div className="bg-slate-800/30 border border-slate-700/50 rounded-2xl p-4 flex items-center justify-between">
             <span className="text-slate-300 text-xs font-medium">{t.spyCountLabel}</span>
@@ -187,7 +227,7 @@ const Setup: React.FC<SetupProps> = ({
       )}
 
       {/* Waiting Message for Clients */}
-      {gameMode === GameMode.ONLINE && !isHost && hasLobbyStarted && (
+      {gameMode === GameMode.ONLINE && !isHost && hasLobbyStarted && players.length >= 1 && (
         <div className="text-center py-4 animate-pulse">
            <p className="text-slate-500 text-xs uppercase tracking-[0.2em]">{lang === Language.EN ? 'Waiting for host to start...' : 'در انتظار شروع توسط مدیر...'}</p>
         </div>
