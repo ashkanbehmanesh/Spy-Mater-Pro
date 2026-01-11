@@ -73,7 +73,6 @@ const App: React.FC = () => {
           });
         }
       });
-      // Send current player list to the newcomer immediately
       conn.on('open', () => {
         setPlayers(prev => {
           conn.send({ type: 'SYNC_PLAYERS', payload: prev });
@@ -137,27 +136,22 @@ const App: React.FC = () => {
 
   const startGame = useCallback(() => {
     if (players.length < 3) return;
-    
     const shuffledPlayers = shuffleArray(players);
     const validSpyCount = Math.max(1, Math.min(spyCount, players.length - 1));
     const spyIndices = new Set<number>();
     while (spyIndices.size < validSpyCount) {
       spyIndices.add(Math.floor(Math.random() * shuffledPlayers.length));
     }
-
     const updatedPlayers = shuffledPlayers.map((p, idx) => ({
       ...p,
       isSpy: spyIndices.has(idx),
       hasSeenRole: false,
     }));
-    
     const randomWord = WORD_LIST[Math.floor(Math.random() * WORD_LIST.length)];
-    
     setPlayers(updatedPlayers);
     setCurrentWord(randomWord);
     setRevealingPlayerIndex(0);
     setGameState(GameState.REVEAL);
-
     if (gameMode === GameMode.ONLINE && isHost) {
       broadcast({ 
         type: 'START_GAME', 
@@ -172,12 +166,9 @@ const App: React.FC = () => {
       const myIdx = players.findIndex(p => p.id === (peerRef.current?.id));
       if (myIdx !== -1) updatedPlayers[myIdx].hasSeenRole = true;
       setPlayers(updatedPlayers);
-      
-      // Notify host that I'm ready
       if (!isHost) {
-        broadcast({ type: 'PLAYER_JOINED', payload: updatedPlayers[myIdx] }); // Just reusing for sync
+        broadcast({ type: 'PLAYER_JOINED', payload: updatedPlayers[myIdx] });
       }
-
       const allReady = updatedPlayers.every(p => p.hasSeenRole);
       if (allReady && isHost) {
         setGameState(GameState.PLAYING);
@@ -208,7 +199,6 @@ const App: React.FC = () => {
     if (isHost) broadcast({ type: 'STATE_UPDATE', payload: { gameState: GameState.SUMMARY } });
   }, [isHost, broadcast]);
 
-  // Clean up on unmount or mode change
   useEffect(() => {
     return () => {
       if (peerRef.current) {
@@ -230,7 +220,7 @@ const App: React.FC = () => {
     : players[revealingPlayerIndex];
 
   return (
-    <div className={`min-h-screen flex flex-col items-center p-4 pb-24 transition-colors duration-500 ${isRtl ? 'rtl text-right' : ''}`}>
+    <div className={`min-h-screen no-select flex flex-col items-center p-4 pb-28 transition-colors duration-500 ${isRtl ? 'rtl text-right' : ''}`}>
       <div className="w-full max-w-md bg-slate-900/50 backdrop-blur-xl border border-slate-800 rounded-3xl overflow-hidden shadow-2xl mb-4">
         {/* Header */}
         <div className="p-6 border-b border-slate-800 flex justify-between items-center">
@@ -301,8 +291,8 @@ const App: React.FC = () => {
         </main>
       </div>
 
-      {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900/80 backdrop-blur-2xl border-t border-slate-800 flex justify-around items-center z-50">
+      {/* Bottom Navigation with iOS Safe Area Padding */}
+      <nav className="fixed bottom-0 left-0 right-0 px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] bg-slate-900/90 backdrop-blur-2xl border-t border-slate-800 flex justify-around items-center z-50">
         <button 
           onClick={() => setActiveTab('HOME')}
           className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'HOME' ? 'text-red-500 scale-110' : 'text-slate-500 hover:text-slate-300'}`}

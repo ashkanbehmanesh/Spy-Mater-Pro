@@ -2,6 +2,7 @@
   "name": "SpyMaster Pro",
   "description": "A high-stakes party game where one player is the secret spy. Find the spy before time runs out! Supports 500+ words in English and Persian.",
   "requestFramePermissions": [
-    "microphone"
+    "microphone",
+    "camera"
   ]
 }
