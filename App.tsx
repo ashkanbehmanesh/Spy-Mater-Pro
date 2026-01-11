@@ -1,13 +1,14 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Player, GameState, Language, WordPair } from './types';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { Peer } from 'peerjs';
+import { Player, GameState, Language, WordPair, GameMode, PeerMessage } from './types';
 import { WORD_LIST, GAME_DURATION } from './constants';
 import Setup from './components/Setup';
 import Reveal from './components/Reveal';
 import GameView from './components/GameView';
 import Summary from './components/Summary';
+import About from './components/About';
 
-// Fisher-Yates shuffle algorithm - Constrained to object types to allow spreading
 const shuffleArray = <T extends object>(array: T[]): T[] => {
   const shuffled = [...array];
   for (let i = shuffled.length - 1; i > 0; i--) {
@@ -17,7 +18,13 @@ const shuffleArray = <T extends object>(array: T[]): T[] => {
   return shuffled;
 };
 
+const generateRoomId = () => {
+  return Math.random().toString(36).substring(2, 8).toUpperCase();
+};
+
 const App: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<'HOME' | 'ABOUT'>('HOME');
+  const [gameMode, setGameMode] = useState<GameMode>(GameMode.LOCAL);
   const [gameState, setGameState] = useState<GameState>(GameState.SETUP);
   const [language, setLanguage] = useState<Language>(Language.EN);
   const [players, setPlayers] = useState<Player[]>([]);
@@ -25,19 +32,114 @@ const App: React.FC = () => {
   const [currentWord, setCurrentWord] = useState<WordPair | null>(null);
   const [revealingPlayerIndex, setRevealingPlayerIndex] = useState(0);
 
+  // Networking State
+  const [peerId, setPeerId] = useState<string>('');
+  const [isHost, setIsHost] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const peerRef = useRef<Peer | null>(null);
+  const connectionsRef = useRef<any[]>([]);
+
   const isRtl = language === Language.FA;
 
-  // Initialize a new game
+  const broadcast = useCallback((message: PeerMessage) => {
+    connectionsRef.current.forEach(conn => {
+      if (conn.open) conn.send(message);
+    });
+  }, []);
+
+  const initHost = useCallback((name: string) => {
+    setIsConnecting(true);
+    const id = generateRoomId();
+    const peer = new Peer(id);
+    peerRef.current = peer;
+
+    peer.on('open', (assignedId) => {
+      setPeerId(assignedId);
+      setIsHost(true);
+      setIsConnecting(false);
+      setPlayers([{ id: assignedId, name, isSpy: false, hasSeenRole: false, isHost: true, isMe: true }]);
+    });
+
+    peer.on('connection', (conn) => {
+      connectionsRef.current.push(conn);
+      conn.on('data', (data: any) => {
+        const msg = data as PeerMessage;
+        if (msg.type === 'PLAYER_JOINED') {
+          setPlayers(prev => {
+            if (prev.find(p => p.id === msg.payload.id)) return prev;
+            const newList = [...prev, msg.payload];
+            broadcast({ type: 'SYNC_PLAYERS', payload: newList });
+            return newList;
+          });
+        }
+      });
+      // Send current player list to the newcomer immediately
+      conn.on('open', () => {
+        setPlayers(prev => {
+          conn.send({ type: 'SYNC_PLAYERS', payload: prev });
+          return prev;
+        });
+      });
+    });
+
+    peer.on('error', (err) => {
+      console.error('Peer error:', err);
+      setIsConnecting(false);
+      alert(language === Language.EN ? 'Connection error. Try again.' : 'خطا در اتصال. دوباره تلاش کنید.');
+      peer.destroy();
+      peerRef.current = null;
+    });
+  }, [broadcast, language]);
+
+  const joinRoom = useCallback((targetRoomId: string, myName: string) => {
+    setIsConnecting(true);
+    const peer = new Peer();
+    peerRef.current = peer;
+
+    peer.on('open', (myPeerId) => {
+      const conn = peer.connect(targetRoomId.toUpperCase());
+      
+      conn.on('open', () => {
+        setIsConnecting(false);
+        setIsHost(false);
+        setPeerId(targetRoomId.toUpperCase());
+        const me: Player = { id: myPeerId, name: myName, isSpy: false, hasSeenRole: false, isMe: true };
+        conn.send({ type: 'PLAYER_JOINED', payload: me });
+        setPlayers([me]);
+      });
+
+      conn.on('data', (data: any) => {
+        const msg = data as PeerMessage;
+        if (msg.type === 'SYNC_PLAYERS') setPlayers(msg.payload);
+        if (msg.type === 'START_GAME') {
+          setPlayers(msg.payload.players);
+          setCurrentWord(msg.payload.word);
+          setGameState(GameState.REVEAL);
+        }
+        if (msg.type === 'STATE_UPDATE') {
+          if (msg.payload.gameState) setGameState(msg.payload.gameState);
+        }
+      });
+
+      conn.on('error', (err) => {
+        console.error('Connection error:', err);
+        setIsConnecting(false);
+        alert(language === Language.EN ? 'Could not join room.' : 'ورود به اتاق ناموفق بود.');
+      });
+    });
+
+    peer.on('error', (err) => {
+      console.error('Peer error:', err);
+      setIsConnecting(false);
+      alert(language === Language.EN ? 'Networking error.' : 'خطای شبکه.');
+    });
+  }, [language]);
+
   const startGame = useCallback(() => {
     if (players.length < 3) return;
-
-    // Shuffle the players list
+    
     const shuffledPlayers = shuffleArray(players);
-    
-    // Ensure spyCount is valid (at least 1, but less than players.length)
     const validSpyCount = Math.max(1, Math.min(spyCount, players.length - 1));
-    
-    // Pick random indices for spies
     const spyIndices = new Set<number>();
     while (spyIndices.size < validSpyCount) {
       spyIndices.add(Math.floor(Math.random() * shuffledPlayers.length));
@@ -49,40 +151,87 @@ const App: React.FC = () => {
       hasSeenRole: false,
     }));
     
-    // Pick random word
     const randomWord = WORD_LIST[Math.floor(Math.random() * WORD_LIST.length)];
     
     setPlayers(updatedPlayers);
     setCurrentWord(randomWord);
     setRevealingPlayerIndex(0);
     setGameState(GameState.REVEAL);
-  }, [players, spyCount]);
+
+    if (gameMode === GameMode.ONLINE && isHost) {
+      broadcast({ 
+        type: 'START_GAME', 
+        payload: { players: updatedPlayers, word: randomWord } 
+      });
+    }
+  }, [players, spyCount, gameMode, isHost, broadcast]);
 
   const handleRevealNext = useCallback(() => {
-    const updatedPlayers = [...players];
-    updatedPlayers[revealingPlayerIndex].hasSeenRole = true;
-    setPlayers(updatedPlayers);
+    if (gameMode === GameMode.ONLINE) {
+      const updatedPlayers = [...players];
+      const myIdx = players.findIndex(p => p.id === (peerRef.current?.id));
+      if (myIdx !== -1) updatedPlayers[myIdx].hasSeenRole = true;
+      setPlayers(updatedPlayers);
+      
+      // Notify host that I'm ready
+      if (!isHost) {
+        broadcast({ type: 'PLAYER_JOINED', payload: updatedPlayers[myIdx] }); // Just reusing for sync
+      }
 
-    if (revealingPlayerIndex < players.length - 1) {
-      setRevealingPlayerIndex(revealingPlayerIndex + 1);
+      const allReady = updatedPlayers.every(p => p.hasSeenRole);
+      if (allReady && isHost) {
+        setGameState(GameState.PLAYING);
+        broadcast({ type: 'STATE_UPDATE', payload: { gameState: GameState.PLAYING } });
+      }
     } else {
-      setGameState(GameState.PLAYING);
+      const updatedPlayers = [...players];
+      updatedPlayers[revealingPlayerIndex].hasSeenRole = true;
+      setPlayers(updatedPlayers);
+      if (revealingPlayerIndex < players.length - 1) {
+        setRevealingPlayerIndex(revealingPlayerIndex + 1);
+      } else {
+        setGameState(GameState.PLAYING);
+      }
     }
-  }, [players, revealingPlayerIndex]);
+  }, [players, revealingPlayerIndex, gameMode, isHost, broadcast]);
 
   const resetGame = useCallback(() => {
     setGameState(GameState.SETUP);
     setCurrentWord(null);
     setRevealingPlayerIndex(0);
-  }, []);
+    setPlayers(prev => prev.map(p => ({ ...p, hasSeenRole: false, isSpy: false })));
+    if (isHost) broadcast({ type: 'STATE_UPDATE', payload: { gameState: GameState.SETUP } });
+  }, [isHost, broadcast]);
 
   const finishGame = useCallback(() => {
     setGameState(GameState.SUMMARY);
-  }, []);
+    if (isHost) broadcast({ type: 'STATE_UPDATE', payload: { gameState: GameState.SUMMARY } });
+  }, [isHost, broadcast]);
+
+  // Clean up on unmount or mode change
+  useEffect(() => {
+    return () => {
+      if (peerRef.current) {
+        peerRef.current.destroy();
+        peerRef.current = null;
+        connectionsRef.current = [];
+      }
+    };
+  }, [gameMode]);
+
+  const navLabels = {
+    home: language === Language.EN ? 'Home' : 'خانه',
+    about: language === Language.EN ? 'About' : 'درباره بازی',
+  };
+
+  const myId = peerRef.current?.id;
+  const me = gameMode === GameMode.ONLINE 
+    ? players.find(p => p.id === myId)
+    : players[revealingPlayerIndex];
 
   return (
-    <div className={`min-h-screen flex flex-col items-center justify-center p-4 transition-colors duration-500 ${isRtl ? 'rtl' : ''}`}>
-      <div className="w-full max-w-md bg-slate-900/50 backdrop-blur-xl border border-slate-800 rounded-3xl overflow-hidden shadow-2xl">
+    <div className={`min-h-screen flex flex-col items-center p-4 pb-24 transition-colors duration-500 ${isRtl ? 'rtl text-right' : ''}`}>
+      <div className="w-full max-w-md bg-slate-900/50 backdrop-blur-xl border border-slate-800 rounded-3xl overflow-hidden shadow-2xl mb-4">
         {/* Header */}
         <div className="p-6 border-b border-slate-800 flex justify-between items-center">
           <h1 className="text-2xl font-bold bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent">
@@ -96,49 +245,86 @@ const App: React.FC = () => {
           </button>
         </div>
 
-        {/* Content */}
+        {/* Content Area */}
         <main className="p-6">
-          {gameState === GameState.SETUP && (
-            <Setup 
-              players={players} 
-              setPlayers={setPlayers} 
-              spyCount={spyCount}
-              setSpyCount={setSpyCount}
-              onStart={startGame} 
-              lang={language}
-            />
-          )}
+          {activeTab === 'ABOUT' ? (
+            <About lang={language} />
+          ) : (
+            <>
+              {gameState === GameState.SETUP && (
+                <Setup 
+                  players={players} 
+                  setPlayers={setPlayers} 
+                  spyCount={spyCount}
+                  setSpyCount={setSpyCount}
+                  onStart={startGame} 
+                  lang={language}
+                  gameMode={gameMode}
+                  setGameMode={setGameMode}
+                  peerId={peerId}
+                  isHost={isHost}
+                  isConnecting={isConnecting}
+                  onCreateRoom={initHost}
+                  onJoinRoom={joinRoom}
+                />
+              )}
 
-          {gameState === GameState.REVEAL && currentWord && (
-            <Reveal 
-              player={players[revealingPlayerIndex]} 
-              word={currentWord} 
-              onNext={handleRevealNext}
-              lang={language}
-            />
-          )}
+              {gameState === GameState.REVEAL && currentWord && (
+                <Reveal 
+                  player={me || players[0]} 
+                  word={currentWord} 
+                  onNext={handleRevealNext}
+                  lang={language}
+                  isMultiplayer={gameMode === GameMode.ONLINE}
+                />
+              )}
 
-          {gameState === GameState.PLAYING && (
-            <GameView 
-              duration={GAME_DURATION} 
-              onFinish={finishGame}
-              lang={language}
-            />
-          )}
+              {gameState === GameState.PLAYING && (
+                <GameView 
+                  duration={GAME_DURATION} 
+                  onFinish={finishGame}
+                  lang={language}
+                  isHost={gameMode === GameMode.LOCAL || isHost}
+                />
+              )}
 
-          {gameState === GameState.SUMMARY && (
-            <Summary 
-              players={players} 
-              onReset={resetGame}
-              lang={language}
-            />
+              {gameState === GameState.SUMMARY && (
+                <Summary 
+                  players={players} 
+                  onReset={resetGame}
+                  lang={language}
+                  isHost={gameMode === GameMode.LOCAL || isHost}
+                />
+              )}
+            </>
           )}
         </main>
       </div>
 
-      <footer className="mt-8 text-slate-500 text-sm opacity-50">
-        &copy; 2024 SpyMaster Pro
-      </footer>
+      {/* Bottom Navigation */}
+      <nav className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900/80 backdrop-blur-2xl border-t border-slate-800 flex justify-around items-center z-50">
+        <button 
+          onClick={() => setActiveTab('HOME')}
+          className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'HOME' ? 'text-red-500 scale-110' : 'text-slate-500 hover:text-slate-300'}`}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+          </svg>
+          <span className="text-[10px] font-bold uppercase tracking-widest">{navLabels.home}</span>
+        </button>
+
+        <div className="w-px h-8 bg-slate-800"></div>
+
+        <button 
+          onClick={() => setActiveTab('ABOUT')}
+          className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'ABOUT' ? 'text-red-500 scale-110' : 'text-slate-500 hover:text-slate-300'}`}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span className="text-[10px] font-bold uppercase tracking-widest">{navLabels.about}</span>
+        </button>
+      </nav>
     </div>
   );
 };
