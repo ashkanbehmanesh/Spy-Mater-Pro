@@ -14,6 +14,7 @@
     "typescript": "^5.0.0"
   },
   "scripts": {
+    "dev": "vite",
     "build": "tsc && vite build",
     "copy": "npx cap copy",
     "add-ios": "npx cap add ios",
