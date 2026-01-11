@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Player, Language } from '../types';
 
 interface SummaryProps {
@@ -10,56 +10,132 @@ interface SummaryProps {
 }
 
 const Summary: React.FC<SummaryProps> = ({ players, onReset, lang, isHost }) => {
+  const result = useMemo(() => {
+    const voteTallies: Record<string, number> = {};
+    players.forEach(p => {
+      if (p.votedForId) {
+        voteTallies[p.votedForId] = (voteTallies[p.votedForId] || 0) + 1;
+      }
+    });
+
+    let suspectId = '';
+    let maxVotes = 0;
+    Object.entries(voteTallies).forEach(([id, count]) => {
+      if (count > maxVotes) {
+        maxVotes = count;
+        suspectId = id;
+      }
+    });
+
+    const suspect = players.find(p => p.id === suspectId);
+    const won = suspect?.isSpy === true;
+    
+    return { suspect, won, hasConsensus: maxVotes > 0 };
+  }, [players]);
+
   const spies = players.filter(p => p.isSpy);
 
   const t = {
-    gameOver: lang === Language.EN ? 'Game Over!' : 'بازی تمام شد!',
-    spyWas: lang === Language.EN 
-      ? (spies.length > 1 ? 'The Spies Were:' : 'The Spy Was:') 
-      : (spies.length > 1 ? 'جاسوس‌ها این‌ها بودند:' : 'جاسوس این بود:'),
-    congrats: lang === Language.EN ? 'Did you find them?' : 'آیا توانستید آن‌ها را پیدا کنید؟',
-    playAgain: lang === Language.EN ? 'New Game' : 'بازی مجدد',
-    otherPlayers: lang === Language.EN ? 'Other Players:' : 'سایر بازیکنان:',
-    waiting: lang === Language.EN ? 'Waiting for host to restart...' : 'در انتظار شروع مجدد توسط میزبان...',
+    victory: lang === Language.EN ? 'CITIZENS WON!' : 'شهروندان پیروز شدند!',
+    defeat: lang === Language.EN ? 'SPY WON!' : 'جاسوس پیروز شد!',
+    troll: 'hehehehehehehe!',
+    spyWas: lang === Language.EN ? 'THE REAL SPY' : 'جاسوس واقعی',
+    suspected: lang === Language.EN ? 'THE SUSPECT' : 'فرد متهم شده',
+    noConsensus: lang === Language.EN ? 'NO MAJORITY VOTE' : 'بدون توافق آرا',
+    playAgain: lang === Language.EN ? 'START NEW GAME' : 'شروع بازی جدید',
+    waiting: lang === Language.EN ? 'WAITING FOR HOST...' : 'در انتظار مدیر...',
   };
 
   return (
-    <div className="flex flex-col items-center text-center py-4 space-y-6 animate-in zoom-in duration-500">
-      <div className="space-y-1">
-        <h2 className="text-3xl font-black text-red-600 uppercase tracking-tighter">{t.gameOver}</h2>
-        <p className="text-slate-400 text-xs font-medium">{t.congrats}</p>
-      </div>
-
-      <div className="w-full bg-slate-800/40 border border-slate-700 rounded-2xl p-6 relative overflow-hidden">
-        <p className="text-slate-500 text-[8px] font-bold uppercase tracking-widest mb-3">{t.spyWas}</p>
-        <div className="space-y-1">
-          {spies.map(spy => (
-            <div key={spy.id} className="text-2xl font-black text-white">{spy.name}</div>
-          ))}
+    <div className={`fixed inset-0 z-[100] flex items-center justify-center p-4 transition-colors duration-1000 ${result.won ? 'bg-green-700' : 'bg-red-800'}`}>
+      {/* 90% Height Container with 5% Vertical Margins */}
+      <div className="w-full max-w-lg h-[90vh] flex flex-col bg-black/30 backdrop-blur-2xl rounded-[3rem] border border-white/10 shadow-[0_0_100px_rgba(0,0,0,0.5)] overflow-hidden animate-in zoom-in fade-in duration-500">
+        
+        {/* Header Section */}
+        <div className={`p-8 text-center border-b border-white/5 ${result.won ? 'bg-green-500/20' : 'bg-red-500/20'}`}>
+          <h2 className="text-4xl md:text-5xl font-black text-white tracking-tighter drop-shadow-lg mb-2">
+            {result.won ? t.victory : t.defeat}
+          </h2>
+          {!result.won && (
+            <p className="text-white/80 font-mono text-lg italic tracking-[0.2em] animate-pulse">
+              {t.troll}
+            </p>
+          )}
         </div>
-      </div>
 
-      <div className="w-full text-left">
-        <p className="text-slate-500 text-[8px] font-bold uppercase mb-2 ml-1">{t.otherPlayers}</p>
-        <div className="grid grid-cols-2 gap-2">
-          {players.filter(p => !p.isSpy).map(p => (
-            <div key={p.id} className="bg-slate-800/20 border border-slate-800 p-2 rounded-xl text-slate-300 text-xs font-medium truncate">
-              {p.name}
+        {/* Scrollable Results Content */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-8 space-y-12">
+          
+          {/* Suspect Section */}
+          <div className="space-y-4 animate-in slide-in-from-bottom-10 delay-200 duration-700">
+            <div className="flex items-center gap-4">
+              <div className="h-px flex-1 bg-white/10"></div>
+              <p className="text-white/40 text-[10px] font-black uppercase tracking-[0.4em]">
+                {t.suspected}
+              </p>
+              <div className="h-px flex-1 bg-white/10"></div>
             </div>
-          ))}
-        </div>
-      </div>
+            <div className="text-center py-4">
+              {result.hasConsensus ? (
+                <div className="space-y-2">
+                  <p className="text-5xl font-black text-white">
+                    {result.suspect?.name}
+                  </p>
+                  <p className={`text-xs font-bold uppercase ${result.won ? 'text-green-400' : 'text-red-400'}`}>
+                    {result.won ? (lang === Language.EN ? 'Correct Guess!' : 'حدس درست!') : (lang === Language.EN ? 'Innocent!' : 'بی‌گناه!')}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-2xl font-bold text-white/30 italic">
+                  {t.noConsensus}
+                </p>
+              )}
+            </div>
+          </div>
 
-      {isHost ? (
-        <button
-          onClick={onReset}
-          className="w-full py-4 bg-gradient-to-r from-red-600 to-orange-600 text-white rounded-2xl font-bold text-lg hover:from-red-500 shadow-xl"
-        >
-          {t.playAgain}
-        </button>
-      ) : (
-        <p className="text-slate-500 text-xs italic">{t.waiting}</p>
-      )}
+          {/* Real Spies Section */}
+          <div className="space-y-4 animate-in slide-in-from-bottom-10 delay-500 duration-700">
+            <div className="flex items-center gap-4">
+              <div className="h-px flex-1 bg-white/10"></div>
+              <p className="text-white/40 text-[10px] font-black uppercase tracking-[0.4em]">
+                {t.spyWas}
+              </p>
+              <div className="h-px flex-1 bg-white/10"></div>
+            </div>
+            <div className="space-y-6 text-center">
+              {spies.map(spy => (
+                <div key={spy.id} className="relative group p-6 bg-white/5 rounded-3xl border border-white/5">
+                   <p className="text-5xl font-black text-white mb-2">
+                     {spy.name}
+                   </p>
+                   <span className="inline-block px-4 py-1.5 bg-red-600/40 text-red-100 text-[10px] font-black rounded-full border border-red-500/30 tracking-widest">
+                     SPY IDENTITY
+                   </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Action Button Section - Fixed at Bottom of Card */}
+        <div className="p-8 border-t border-white/5 bg-black/20">
+          {isHost ? (
+            <button
+              onClick={onReset}
+              className="w-full py-6 bg-white text-slate-900 rounded-[2rem] font-black text-xl hover:scale-[1.02] active:scale-95 transition-all shadow-xl"
+            >
+              {t.playAgain}
+            </button>
+          ) : (
+            <div className="text-center p-6 bg-white/5 rounded-3xl border border-white/5">
+              <p className="text-white/50 text-sm font-black animate-pulse tracking-widest">
+                {t.waiting}
+              </p>
+            </div>
+          )}
+        </div>
+
+      </div>
     </div>
   );
 };
